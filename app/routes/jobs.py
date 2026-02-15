@@ -7,6 +7,10 @@ from app.models import Job
 from app.db import engine
 from app.services.transcription import transcribe_file
 from app.services.storage import ensure_job_dirs, get_job_input_dir, get_job_output_dir
+from fastapi import BackgroundTasks
+from app.services.background import run_transcription
+from fastapi.responses import FileResponse
+from pathlib import Path
 
 router = APIRouter()
 
@@ -91,7 +95,7 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
         }
 
 @router.post("/jobs/{job_id}/transcribe")
-def transcribe_job(job_id: str):
+def start_transcription(job_id: str, background_tasks: BackgroundTasks):
     with Session(engine) as session:
         job = session.exec(select(Job).where(Job.id == job_id)).first()
         if not job:
@@ -100,28 +104,32 @@ def transcribe_job(job_id: str):
         if not job.input_path:
             raise HTTPException(status_code=400, detail="No audio uploaded for this job")
 
-        # Update status -> transcribing
-        job.status = "transcribing"
-        session.add(job)
-        session.commit()
+        # If already running or done, return current state
+        if job.status in {"transcribing", "transcribed"}:
+            return {"id": job.id, "status": job.status, "transcript_path": job.transcript_path}
 
-        # Run transcription
-        transcript_text = transcribe_file(job.input_path)
-
-        # Persist transcript artifact
-        output_dir = get_job_output_dir(job_id)
-        transcript_path = output_dir / "transcript.txt"
-        transcript_path.write_text(transcript_text, encoding="utf-8")
-
-        # Update job
-        job.transcript_path = str(transcript_path)
-        job.status = "transcribed"
+        # Mark as queued and run in background
+        job.status = "queued"
         session.add(job)
         session.commit()
         session.refresh(job)
 
-        return {
-            "id": job.id,
-            "status": job.status,
-            "transcript_path": job.transcript_path,
-        }
+        background_tasks.add_task(run_transcription, job_id)
+
+        return {"id": job.id, "status": job.status}
+
+@router.get("/jobs/{job_id}/transcript")
+def get_transcript(job_id: str):
+    with Session(engine) as session:
+        job = session.exec(select(Job).where(Job.id == job_id)).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if job.status != "transcribed" or not job.transcript_path:
+            raise HTTPException(status_code=409, detail="Transcript not available yet")
+
+        path = Path(job.transcript_path)
+        if not path.exists():
+            raise HTTPException(status_code=500, detail="Transcript file is missing")
+
+        return FileResponse(path, media_type="text/plain", filename="transcript.txt")
