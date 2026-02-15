@@ -3,4 +3,7 @@ __pycache__/
 *.pyc
 database.db
 .env
+.DS_Store
+.cursor/
+.vscode/
 storage/
