@@ -1,16 +1,15 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from pathlib import Path
 import shutil
 
+from app.job_status import JobStatus
 from app.models import Job
 from app.db import engine
-from app.services.transcription import transcribe_file
-from app.services.storage import ensure_job_dirs, get_job_input_dir, get_job_output_dir
-from fastapi import BackgroundTasks
+from app.services.storage import ensure_job_dirs, get_job_input_dir
 from app.services.background import run_transcription
-from fastapi.responses import FileResponse
-from pathlib import Path
 
 router = APIRouter()
 
@@ -81,7 +80,7 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
 
         # Update job metadata after successful upload.
         job.input_path = str(dest_path)
-        job.status = "uploaded"
+        job.status = JobStatus.UPLOADED.value
 
         session.add(job)
         session.commit()
@@ -105,11 +104,11 @@ def start_transcription(job_id: str, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=400, detail="No audio uploaded for this job")
 
         # If already running or done, return current state
-        if job.status in {"transcribing", "transcribed"}:
+        if job.status in {JobStatus.TRANSCRIBING.value, JobStatus.TRANSCRIBED.value}:
             return {"id": job.id, "status": job.status, "transcript_path": job.transcript_path}
 
         # Mark as queued and run in background
-        job.status = "queued"
+        job.status = JobStatus.QUEUED.value
         session.add(job)
         session.commit()
         session.refresh(job)
@@ -125,7 +124,7 @@ def get_transcript(job_id: str):
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        if job.status != "transcribed" or not job.transcript_path:
+        if job.status != JobStatus.TRANSCRIBED.value or not job.transcript_path:
             raise HTTPException(status_code=409, detail="Transcript not available yet")
 
         path = Path(job.transcript_path)

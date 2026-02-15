@@ -1,6 +1,7 @@
 from sqlmodel import Session, select
 
 from app.db import engine
+from app.job_status import JobStatus
 from app.models import Job
 from app.services.jobs import save_job
 from app.services.storage import get_job_output_dir
@@ -14,13 +15,13 @@ def run_transcription(job_id: str) -> None:
             return
 
         if not job.input_path:
-            job.status = "error"
+            job.status = JobStatus.ERROR.value
             job.error_message = "No audio uploaded for this job"
             save_job(session, job)
             return
 
         try:
-            job.status = "transcribing"
+            job.status = JobStatus.TRANSCRIBING.value
             job.error_message = None
             save_job(session, job)
 
@@ -31,10 +32,10 @@ def run_transcription(job_id: str) -> None:
             transcript_path.write_text(transcript_text, encoding="utf-8")
 
             job.transcript_path = str(transcript_path)
-            job.status = "transcribed"
+            job.status = JobStatus.TRANSCRIBED.value
             save_job(session, job)
 
         except Exception as e:
-            job.status = "error"
+            job.status = JobStatus.ERROR.value
             job.error_message = str(e)
             save_job(session, job)
