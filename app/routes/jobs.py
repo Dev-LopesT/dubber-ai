@@ -5,7 +5,7 @@ import shutil
 
 from app.models import Job
 from app.db import engine
-from app.services.storage import ensure_job_dirs
+from app.services.storage import ensure_job_dirs, get_job_input_dir
 
 router = APIRouter()
 
@@ -53,7 +53,7 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
         if not file.filename:
             raise HTTPException(status_code=400, detail="Missing filename")
 
-        # pegar extensão real
+        # Use file extension from the uploaded filename.
         extension = Path(file.filename).suffix.lower()
 
         if extension not in ALLOWED_EXTENSIONS:
@@ -62,19 +62,19 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
                 detail=f"Unsupported file type: {extension}"
             )
 
-        # criar pastas
+        # Ensure storage directories exist.
         ensure_job_dirs(job_id)
-        input_dir = Path("storage") / "jobs" / job_id / "input"
+        input_dir = get_job_input_dir(job_id)
 
-        # nome padronizado
+        # Store uploaded audio with a standardized filename.
         standardized_filename = f"input{extension}"
         dest_path = input_dir / standardized_filename
 
-        # salvar arquivo
+        # Persist upload to disk.
         with dest_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # atualizar job
+        # Update job metadata after successful upload.
         job.input_path = str(dest_path)
         job.status = "uploaded"
 
