@@ -5,7 +5,8 @@ import shutil
 
 from app.models import Job
 from app.db import engine
-from app.services.storage import ensure_job_dirs, get_job_input_dir
+from app.services.transcription import transcribe_file
+from app.services.storage import ensure_job_dirs, get_job_input_dir, get_job_output_dir
 
 router = APIRouter()
 
@@ -87,4 +88,40 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
             "status": job.status,
             "input_path": job.input_path,
             "filename_saved": standardized_filename,
+        }
+
+@router.post("/jobs/{job_id}/transcribe")
+def transcribe_job(job_id: str):
+    with Session(engine) as session:
+        job = session.exec(select(Job).where(Job.id == job_id)).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if not job.input_path:
+            raise HTTPException(status_code=400, detail="No audio uploaded for this job")
+
+        # Update status -> transcribing
+        job.status = "transcribing"
+        session.add(job)
+        session.commit()
+
+        # Run transcription
+        transcript_text = transcribe_file(job.input_path)
+
+        # Persist transcript artifact
+        output_dir = get_job_output_dir(job_id)
+        transcript_path = output_dir / "transcript.txt"
+        transcript_path.write_text(transcript_text, encoding="utf-8")
+
+        # Update job
+        job.transcript_path = str(transcript_path)
+        job.status = "transcribed"
+        session.add(job)
+        session.commit()
+        session.refresh(job)
+
+        return {
+            "id": job.id,
+            "status": job.status,
+            "transcript_path": job.transcript_path,
         }

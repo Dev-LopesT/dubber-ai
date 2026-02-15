@@ -8,19 +8,19 @@ def get_job_dir(job_id: str) -> Path:
 
 
 def get_job_input_dir(job_id: str) -> Path:
-    return get_job_dir(job_id) / "input"
+    path = get_job_dir(job_id) / "input"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def get_job_output_dir(job_id: str) -> Path:
-    return get_job_dir(job_id) / "output"
+    path = get_job_dir(job_id) / "output"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def ensure_job_dirs(job_id: str) -> Path:
     job_dir = get_job_dir(job_id)
-    input_dir = get_job_input_dir(job_id)
-    output_dir = get_job_output_dir(job_id)
-
-    input_dir.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+    get_job_input_dir(job_id)
+    get_job_output_dir(job_id)
     return job_dir
