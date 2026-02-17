@@ -10,10 +10,13 @@ from app.models import Job
 from app.db import engine
 from app.services.storage import ensure_job_dirs, get_job_input_dir
 from app.services.background import run_transcription
+from app.services.jobs import save_job
+from app.worker.tasks import transcribe_job_task
 
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg"}
+IN_PROGRESS_STATUSES = {JobStatus.QUEUED.value, JobStatus.TRANSCRIBING.value}
 
 
 @router.post("/jobs")
@@ -54,6 +57,12 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
+        if job.status in IN_PROGRESS_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot upload while transcription is in progress"
+            )
+
         if not file.filename:
             raise HTTPException(status_code=400, detail="Missing filename")
 
@@ -81,6 +90,8 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
         # Update job metadata after successful upload.
         job.input_path = str(dest_path)
         job.status = JobStatus.UPLOADED.value
+        job.transcript_path = None
+        job.error_message = None
 
         session.add(job)
         session.commit()
@@ -94,26 +105,30 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
         }
 
 @router.post("/jobs/{job_id}/transcribe")
-def start_transcription(job_id: str, background_tasks: BackgroundTasks):
+def start_transcription(job_id: str):
     with Session(engine) as session:
         job = session.exec(select(Job).where(Job.id == job_id)).first()
+
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
         if not job.input_path:
-            raise HTTPException(status_code=400, detail="No audio uploaded for this job")
+            raise HTTPException(status_code=400, detail="No audio uploaded")
 
-        # If already running or done, return current state
-        if job.status in {JobStatus.TRANSCRIBING.value, JobStatus.TRANSCRIBED.value}:
-            return {"id": job.id, "status": job.status, "transcript_path": job.transcript_path}
+        if job.status in IN_PROGRESS_STATUSES:
+            raise HTTPException(status_code=409, detail="Transcription already in progress")
 
-        # Mark as queued and run in background
+        if job.status == JobStatus.TRANSCRIBED.value:
+            raise HTTPException(
+                status_code=409,
+                detail="Transcript already generated for this upload"
+            )
+
         job.status = JobStatus.QUEUED.value
-        session.add(job)
-        session.commit()
-        session.refresh(job)
+        job.error_message = None
+        save_job(session, job)
 
-        background_tasks.add_task(run_transcription, job_id)
+        transcribe_job_task.delay(job_id)
 
         return {"id": job.id, "status": job.status}
 
