@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi import BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from pathlib import Path
@@ -9,14 +8,12 @@ from app.job_status import JobStatus
 from app.models import Job
 from app.db import engine
 from app.services.storage import ensure_job_dirs, get_job_input_dir
-from app.services.background import run_transcription
-from app.services.jobs import save_job
+from app.services.jobs import save_job, can_upload_audio, can_start_transcription
 from app.worker.tasks import transcribe_job_task
 
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg"}
-IN_PROGRESS_STATUSES = {JobStatus.QUEUED.value, JobStatus.TRANSCRIBING.value}
 
 
 @router.post("/jobs")
@@ -57,7 +54,7 @@ def upload_audio(job_id: str, file: UploadFile = File(...)):
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        if job.status in IN_PROGRESS_STATUSES:
+        if not can_upload_audio(job):
             raise HTTPException(
                 status_code=409,
                 detail="Cannot upload while transcription is in progress"
@@ -112,17 +109,11 @@ def start_transcription(job_id: str):
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
-        if not job.input_path:
-            raise HTTPException(status_code=400, detail="No audio uploaded")
-
-        if job.status in IN_PROGRESS_STATUSES:
-            raise HTTPException(status_code=409, detail="Transcription already in progress")
-
-        if job.status == JobStatus.TRANSCRIBED.value:
-            raise HTTPException(
-                status_code=409,
-                detail="Transcript already generated for this upload"
-            )
+        can_start, reason = can_start_transcription(job)
+        if not can_start:
+            if reason == "No audio uploaded":
+                raise HTTPException(status_code=400, detail=reason)
+            raise HTTPException(status_code=409, detail=reason)
 
         job.status = JobStatus.QUEUED.value
         job.error_message = None
